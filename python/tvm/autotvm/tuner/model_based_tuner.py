@@ -195,9 +195,16 @@ class ModelBasedTuner(Tuner):
         and then pick plan_size of them according to the diversity metric.
     """
 
-    def __init__(self, task, cost_model, model_optimizer, plan_size, diversity_filter_ratio=None):
+    def __init__(
+        self,
+        task,
+        cost_model,
+        model_optimizer,
+        plan_size,
+        diversity_filter_ratio=None,
+        sampler=None,
+    ):
         super(ModelBasedTuner, self).__init__(task)
-
         # space
         self.task = task
         self.target = task.target
@@ -205,7 +212,8 @@ class ModelBasedTuner(Tuner):
         self.space = task.config_space
         self.space_len = len(task.config_space)
         self.dims = [len(x) for x in self.space.space_map.values()]
-
+        self.sampler = sampler
+        self.next_update = plan_size * 2
         self.cost_model = cost_model
         self.model_optimizer = model_optimizer
         self.diversity_filter_ratio = diversity_filter_ratio
@@ -228,7 +236,6 @@ class ModelBasedTuner(Tuner):
 
     def next_batch(self, batch_size):
         ret = []
-
         counter = 0
         while counter < batch_size:
             if len(self.visited) >= len(self.space):
@@ -246,14 +253,19 @@ class ModelBasedTuner(Tuner):
                 index = np.random.randint(len(self.space))
                 while index in self.visited:
                     index = np.random.randint(len(self.space))
-
-            ret.append(self.space.get(index))
-            self.visited.add(index)
-
+            try:
+                ret.append(self.space.get(index))
+                self.visited.add(index)
+            except:
+                index = np.random.randint(len(self.space))
+                ret.append(self.space.get(index))
+                self.visited.add(index)
             counter += 1
         return ret
 
     def update(self, inputs, results):
+        maximums = []
+        maximums_score = []
         for inp, res in zip(inputs, results):
             index = inp.config.index
             if res.error_no == 0:
@@ -264,39 +276,36 @@ class ModelBasedTuner(Tuner):
             else:
                 self.xs.append(index)
                 self.ys.append(0.0)
-
         # if we have enough new training samples
         if len(self.xs) >= self.plan_size * (self.train_ct + 1) and self.flops_max > 1e-6:
             self.cost_model.fit(self.xs, self.ys, self.plan_size)
-            if self.diversity_filter_ratio:
-                candidate = self.model_optimizer.find_maximums(
-                    self.cost_model, self.plan_size * self.diversity_filter_ratio, self.visited
-                )
-                scores = self.cost_model.predict(candidate)
-                knobs = [point2knob(x, self.dims) for x in candidate]
-                pick_index = submodular_pick(0 * scores, knobs, self.plan_size, knob_weight=1)
-                maximums = np.array(candidate)[pick_index]
-            else:
-                maximums = self.model_optimizer.find_maximums(
-                    self.cost_model, self.plan_size, self.visited
-                )
-
+            maximums, maximums_score = self.model_optimizer.find_maximums(
+                self.cost_model, self.plan_size, self.visited
+            )
             self.trials = maximums
             self.trial_pt = 0
             self.train_ct += 1
+        return maximums, maximums_score
+
+    def exploration(self):
+        maximums, maximums_score = self.model_optimizer.find_maximums(
+            self.cost_model, self.next_update, []
+        )
+        self.trials = maximums
+        self.trial_pt = 0
+        self.train_ct += 1
+        del self.cost_model
+        return maximums, maximums_score
 
     def load_history(self, data_set):
         # set in_tuning as True to make the feature extraction consistent
         GLOBAL_SCOPE.in_tuning = True
-
         # fit base model
         base_model = self.cost_model.spawn_base_model()
         success = base_model.fit_log(data_set, self.plan_size)
-
         if not success:
             GLOBAL_SCOPE.in_tuning = False
             return
-
         # use base model to select initial points
         if not self.trials:
             # no plan yet, use base model to select initial trials
@@ -322,6 +331,7 @@ def point2knob(p, dims):
 
 def knob2point(knob, dims):
     """convert knob form (vector) to point form (single integer)"""
+
     p = 0
     for j, k in enumerate(knob):
         p += int(np.prod(dims[:j])) * k

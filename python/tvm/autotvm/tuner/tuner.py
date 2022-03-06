@@ -17,14 +17,14 @@
 # pylint: disable=unused-argument, no-self-use, invalid-name
 """Base class of tuner"""
 import logging
-import tempfile
-
+import matplotlib.pylab as plt
 import numpy as np
+from tvm.autotvm import feature
 
 from ..measure import MeasureInput, create_measure_batch
-from ..utils import format_si_prefix
 
 from ..env import GLOBAL_SCOPE
+import pickle
 
 logger = logging.getLogger("autotvm")
 
@@ -89,7 +89,18 @@ class Tuner(object):
             result for measurement
         """
 
-    def tune(self, n_trial, measure_option, early_stopping=None, callbacks=(), si_prefix="G"):
+    def exploration(self, plan_size):
+        """Update parameters of the tuner according to measurement results
+
+        Parameters
+        ----------
+        inputs: Array of autotvm.measure.MeasureInput
+            The input for measurement
+        results: Array of autotvm.measure.MeasureResult
+            result for measurement
+        """
+
+    def tune(self, n_trial, measure_option, early_stopping=None, callbacks=(), opt=None):
         """Begin tuning
 
         Parameters
@@ -106,29 +117,31 @@ class Tuner(object):
             (Tuner, List of MeasureInput, List of MeasureResult)
             with no return value. These callback functions will be called on
             every measurement pair. See autotvm/tuner/callback.py for some examples.
-        si_prefix: str
-            One of tvm.autotvm.utils.SI_PREFIXES. The SI prefix to use when reporting FLOPS.
         """
+
+        # self.exploration()
+        self.opt = opt
         measure_batch = create_measure_batch(self.task, measure_option)
         n_parallel = getattr(measure_batch, "n_parallel", 1)
         early_stopping = early_stopping or 1e9
         self.n_trial = n_trial
         self.early_stopping = early_stopping
 
-        # Validate si_prefix arg
-        format_si_prefix(0, si_prefix)
-
         old_level = logger.level
 
         GLOBAL_SCOPE.in_tuning = True
         i = error_ct = 0
-        errors = []
+
+        self.e_i = []
+        self.e_s = []
+        self.xxs = []
+        self.yys = []
+        self.features = []
+
         while i < n_trial:
             if not self.has_next():
                 break
-
             configs = self.next_batch(min(n_parallel, n_trial - i))
-
             inputs = [MeasureInput(self.task.target, self.task, config) for config in configs]
             results = measure_batch(inputs)
 
@@ -141,11 +154,6 @@ class Tuner(object):
                 else:
                     flops = 0
                     error_ct += 1
-                    error = res.costs[0]
-                    if isinstance(error, str):
-                        errors.append(error)
-                    else:
-                        errors.append(str(error))
 
                 if flops > self.best_flops:
                     self.best_flops = flops
@@ -153,45 +161,102 @@ class Tuner(object):
                     self.best_measure_pair = (inp, res)
                     self.best_iter = i + k
 
-                logger.debug(
-                    "No: %d\t%sFLOPS: %.2f/%.2f\tresult: %s\t%s",
-                    i + k + 1,
-                    si_prefix,
-                    format_si_prefix(flops, si_prefix),
-                    format_si_prefix(self.best_flops, si_prefix),
-                    res,
-                    config,
-                )
-
             i += len(results)
-            self.ttl = min(early_stopping + self.best_iter, n_trial) - i
-
-            self.update(inputs, results)
             for callback in callbacks:
                 callback(self, inputs, results)
 
-            if i >= self.best_iter + early_stopping:
-                logger.debug("Early stopped. Best iter: %d.", self.best_iter)
-                break
+            self.update(inputs, results)
+            flops_max = -np.inf
 
-            if error_ct > 150:
-                logging.basicConfig()
-                logger.warning("Too many errors happen in the tuning. Switching to debug mode.")
-                logger.setLevel(logging.DEBUG)
-            else:
-                logger.setLevel(old_level)
+            for inp, res in zip(inputs, results):
+                # calculate flops max
+                if res.error_no == 0:
+                    flops = inp.task.flop / np.mean(res.costs)
+                    if flops > flops_max:
+                        flops_max = flops
 
-        if error_ct == i:
-            _, f = tempfile.mkstemp(prefix="tvm_tuning_errors_", suffix=".log", text=True)
-            with open(f, "w") as file:
-                file.write("\n".join(errors))
-            logging.warning(
-                "Could not find any valid schedule for task %s. "
-                "A file containing the errors has been written to %s.",
-                self.task,
-                f,
-            )
         GLOBAL_SCOPE.in_tuning = False
+
+        del measure_batch
+
+    def one_shot_tune(self, n_trial, measure_option, early_stopping=None, callbacks=(), opt=None):
+        p_i, p_s = self.exploration()
+        self.opt = opt
+        measure_batch = create_measure_batch(self.task, measure_option)
+        n_parallel = getattr(measure_batch, "n_parallel", 1)
+        early_stopping = early_stopping or 1e9
+        self.n_trial = n_trial
+        self.early_stopping = early_stopping
+
+        old_level = logger.level
+        GLOBAL_SCOPE.in_tuning = True
+        offset = 100
+        i = error_ct = 0
+        self.e_i = []
+        self.e_s = []
+        self.xxs = []
+        self.yys = []
+        self.est = []
+
+        for inp, res in zip(p_i, p_s):
+            self.e_i.append(inp)
+            self.e_s.append(res)
+
+        while i < n_trial:
+            if not self.has_next():
+                break
+            configs = self.next_batch(min(n_parallel, n_trial - i))
+            inputs = [MeasureInput(self.task.target, self.task, config) for config in configs]
+            results = measure_batch(inputs)
+
+            # keep best config
+            for k, (inp, res) in enumerate(zip(inputs, results)):
+                config = inp.config
+                if res.error_no == 0:
+                    flops = inp.task.flop / np.mean(res.costs)
+                    error_ct = 0
+                else:
+                    flops = 0
+                    error_ct += 1
+
+                if flops > self.best_flops:
+                    self.best_flops = flops
+                    self.best_config = config
+                    self.best_measure_pair = (inp, res)
+                    self.best_iter = i + k
+
+            i += len(results)
+            for callback in callbacks:
+                callback(self, inputs, results)
+
+            flops_max = -np.inf
+
+            for inp, res in zip(inputs, results):
+                # calculate flops max
+                if res.error_no == 0:
+                    flops = inp.task.flop / np.mean(res.costs)
+                    if flops > flops_max:
+                        flops_max = flops
+
+            for inp, res in zip(inputs, results):
+                index = inp.config.index
+                if res.error_no == 0:
+                    try:
+                        iid = p_i.index(index)
+                        self.est.append(p_i[iid])
+                        self.xxs.append(index)
+                        flops = inp.task.flop / np.mean(res.costs)
+                        self.yys.append(flops)
+                    except:
+                        pass
+
+        GLOBAL_SCOPE.in_tuning = False
+        for i, v, e in zip(self.xxs, self.yys, self.est):
+            np.save(f"{self.opt.save_dir}/{self.opt.task}/output_{self.opt.trial}_{i}.npy", v)
+            np.save(f"{self.opt.save_dir}/{self.opt.task}/estmated_{self.opt.trial}_{i}.npy", e)
+
+            self.opt.trial += 1
+
         del measure_batch
 
     def reset(self):
@@ -205,7 +270,7 @@ class Tuner(object):
 
         Parameters
         ----------
-        data_set: Array of (autotvm.measure.MeasureInput, autotvm.measure.MeasureResult) pair
+        data_set: Array of (MeasureInput, MeasureResult) pair
             Previous tuning records
         """
         raise NotImplementedError()

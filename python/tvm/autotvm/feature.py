@@ -35,7 +35,34 @@ from tvm.te import schedule
 from tvm.driver import build_module
 
 
-def ana_lower(sch, args, binds=None, simple_mode=True):
+def gpu_verify_pass(**kwargs):
+    """Verify the validity of a gpu kernel.
+    This pass will check memory usage and number of threads per block.
+    """
+
+    def verify_pass(f, *_):
+        valid = tvm.tir.analysis.verify_gpu_code(f, kwargs)
+
+        if not valid:
+            raise ()
+        return f
+
+    return tvm.tir.transform.prim_func_pass(verify_pass, opt_level=0)
+
+
+if tvm.gpu(0).exist:
+    gpu_device = tvm.gpu()
+    threads = gpu_device.max_thread_dimensions
+    check_gpu = {
+        "max_shared_memory_per_block": gpu_device.max_shared_memory_per_block,
+        "max_threads_per_block": gpu_device.max_threads_per_block,
+        "max_thread_x": threads[0],
+        "max_thread_y": threads[1],
+        "max_thread_z": threads[2],
+    }
+
+
+def ana_lower(sch, args, binds=None, simple_mode=True, filter=False):
     """Do lower while keeping all axes in IR
     i.e. Do not eliminate loop with extent of 1, do not vectorize, unroll or inject virtual threads
     """
@@ -48,6 +75,15 @@ def ana_lower(sch, args, binds=None, simple_mode=True):
     mod = tvm.IRModule.from_expr(func._move())
     mod = tvm.tir.transform.StorageFlatten(64)(mod._move())
     mod = tvm.tir.transform.Simplify()(mod._move())
+    if tvm.gpu(0).exist and filter:
+        pass_ctx = tvm.ir.transform.PassContext.current()
+        add_lower_pass = pass_ctx.config.get("tir.add_lower_pass", [gpu_verify_pass(**check_gpu)])
+        optimize = tvm.transform.Sequential(add_lower_pass)
+        try:
+            mod = optimize(mod)
+        except:
+            return None
+
     assert simple_mode
     return mod["main"].body
 
@@ -119,7 +155,7 @@ def flatten_itervar_feature(fea):
     return np.concatenate(flatten)
 
 
-def get_itervar_feature_flatten(sch, args, take_log=True):
+def get_itervar_feature_flatten(sch, args, take_log=True, gpu_filter=True):
     """get flatten features of iter vars
     this is equivalent to get_itervar_feature + flatten_itervar_feature, but much faster.
 
@@ -136,7 +172,9 @@ def get_itervar_feature_flatten(sch, args, take_log=True):
     flatten_feature: np.ndarray
         one-dimensional vector
     """
-    stmt = ana_lower(sch, args, simple_mode=True)
+    stmt = ana_lower(sch, args, simple_mode=True, filter=gpu_filter)
+    if stmt == None:
+        return None
     feas = _get_itervar_feature_flatten(stmt, take_log)
     feas = struct.unpack("%df" % (len(feas) // 4), feas)
     return feas
@@ -194,7 +232,7 @@ def get_flatten_name(fea):
     return names
 
 
-def get_buffer_curve_sample_flatten(sch, args, sample_n=30):
+def get_buffer_curve_sample_flatten(sch, args, sample_n=30, gpu_filter=True):
     """
     Get flatten curve sample feature (relation feature)
 
@@ -211,7 +249,9 @@ def get_buffer_curve_sample_flatten(sch, args, sample_n=30):
     flatten_feature: np.ndarray
         one-dimensional vector
     """
-    stmt = ana_lower(sch, args, simple_mode=True)
+    stmt = ana_lower(sch, args, simple_mode=True, filter=gpu_filter)
+    if stmt == None:
+        return None
     feas = _get_buffer_curve_sample_flatten(stmt, sample_n, False)
     feas = struct.unpack("%df" % (len(feas) // 4), feas)
     return feas

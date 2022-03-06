@@ -335,13 +335,11 @@ class XGBoostCostModel(CostModel):
                 feas = pool.map(self.feature_extract_func, args)
             for i, fea in zip(need_extract, feas):
                 fea_cache[i] = fea
-
         feature_len = None
         for idx in indexes:
             if fea_cache[idx] is not None:
                 feature_len = fea_cache[idx].shape[-1]
                 break
-
         ret = np.empty((len(indexes), feature_len), dtype=np.float32)
         for i, ii in enumerate(indexes):
             t = fea_cache[ii]
@@ -436,10 +434,11 @@ def _extract_curve_feature_index(args):
             config, target, task = args
             with target:
                 sch, fargs = task.instantiate(config)
-        fea = feature.get_buffer_curve_sample_flatten(sch, fargs, sample_n=20)
+        fea = feature.get_buffer_curve_sample_flatten(sch, fargs, sample_n=30, gpu_filter=False)
         fea = np.concatenate((fea, list(config.get_other_option().values())))
         return np.array(fea)
-    except Exception:  # pylint: disable=broad-except
+    except Exception as E:  # pylint: disable=broad-except
+        print(E)
         return None
 
 

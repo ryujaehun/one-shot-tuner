@@ -54,7 +54,7 @@ class SimulatedAnnealingOptimizer(ModelOptimizer):
         task,
         n_iter=500,
         temp=(1, 0),
-        persistent=True,
+        persistent=False,
         parallel_size=128,
         early_stop=50,
         log_interval=50,
@@ -71,9 +71,9 @@ class SimulatedAnnealingOptimizer(ModelOptimizer):
         self.early_stop = early_stop or 1e9
         self.log_interval = log_interval
         self.points = None
+        self.history = set()
 
     def find_maximums(self, model, num, exclusive):
-        tic = time.time()
         temp, n_iter, early_stop, log_interval = (
             self.temp,
             self.n_iter,
@@ -110,13 +110,23 @@ class SimulatedAnnealingOptimizer(ModelOptimizer):
             t = temp
             cool = 0
 
-        while k < n_iter and k < k_last_modify + early_stop:
+        while (
+            k < n_iter
+            and k < k_last_modify + early_stop
+            and len(self.history) < len(self.task.config_space)
+        ):
             new_points = np.empty_like(points)
             for i, p in enumerate(points):
-                new_points[i] = random_walk(p, self.dims)
-
+                value = random_walk(p, self.dims)
+                cnt = 0
+                while value in self.history:
+                    value = random_walk(value, self.dims)
+                    cnt += 1
+                    if cnt > 5:
+                        break
+                self.history.add(value)
+                new_points[i] = value
             new_scores = model.predict(new_points)
-
             ac_prob = np.exp(np.minimum((new_scores - scores) / (t + 1e-5), 1))
             ac_index = np.random.random(len(ac_prob)) < ac_prob
 
@@ -129,34 +139,15 @@ class SimulatedAnnealingOptimizer(ModelOptimizer):
                     in_heap.remove(pop[1])
                     in_heap.add(p)
                     k_last_modify = k
-
             k += 1
             t -= cool
-
-            if log_interval and k % log_interval == 0:
-                t_str = "%.2f" % t
-                logger.debug(
-                    "SA iter: %d\tlast_update: %d\tmax-0: %.2f\tmax-1: %.2f\ttemp: %s\t"
-                    "elapsed: %.2f",
-                    k,
-                    k_last_modify,
-                    heap_items[0][0],
-                    np.max([v for v, _ in heap_items]),
-                    t_str,
-                    time.time() - tic,
-                )
-
         heap_items.sort(key=lambda item: -item[0])
         heap_items = [x for x in heap_items if x[0] >= 0]
-        logger.debug(
-            "SA iter: %d\tlast_update: %d\telapsed: %.2f", k, k_last_modify, time.time() - tic
-        )
-        logger.debug("SA Maximums: %s", heap_items)
 
         if self.persistent:
             self.points = points
 
-        return [x[1] for x in heap_items]
+        return [x[1] for x in heap_items], [x[0] for x in heap_items]
 
 
 def random_walk(p, dims):
