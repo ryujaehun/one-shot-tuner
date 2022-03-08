@@ -1,47 +1,109 @@
-<!--- Licensed to the Apache Software Foundation (ASF) under one -->
-<!--- or more contributor license agreements.  See the NOTICE file -->
-<!--- distributed with this work for additional information -->
-<!--- regarding copyright ownership.  The ASF licenses this file -->
-<!--- to you under the Apache License, Version 2.0 (the -->
-<!--- "License"); you may not use this file except in compliance -->
-<!--- with the License.  You may obtain a copy of the License at -->
 
-<!---   http://www.apache.org/licenses/LICENSE-2.0 -->
+# Install TVM
+```
+git clone --recursive https://github.com/ryujaehun/one-shot-tuner.git ost
+cd one-shot-tuner
+```
 
-<!--- Unless required by applicable law or agreed to in writing, -->
-<!--- software distributed under the License is distributed on an -->
-<!--- "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY -->
-<!--- KIND, either express or implied.  See the License for the -->
-<!--- specific language governing permissions and limitations -->
-<!--- under the License. -->
+## To install the these minimal pre-requisites
 
-<img src=https://raw.githubusercontent.com/apache/tvm-site/main/images/logo/tvm-logo-small.png width=128/> Open Deep Learning Compiler Stack
-==============================================
-[Documentation](https://tvm.apache.org/docs) |
-[Contributors](CONTRIBUTORS.md) |
-[Community](https://tvm.apache.org/community) |
-[Release Notes](NEWS.md)
+```
+sudo apt-get update
+sudo apt-get install -y python3 python3-dev python3-setuptools python3-pip gcc libtinfo-dev zlib1g-dev build-essential libedit-dev libxml2-dev libjpeg-dev llvm llvm-10 llvm-10-dev clang-10 git
+pip3 install cmake 
+```
 
-[![Build Status](https://ci.tlcpack.ai/buildStatus/icon?job=tvm/main)](https://ci.tlcpack.ai/job/tvm/job/main/)
-[![WinMacBuild](https://github.com/apache/tvm/workflows/WinMacBuild/badge.svg)](https://github.com/apache/tvm/actions?query=workflow%3AWinMacBuild)
+Edit build/config.cmake to customize the compilation options
+```
+mkdir build
+cp cmake/config.cmake build
+```
+Change set(USE_CUDA OFF) to set(USE_CUDA ON) to enable CUDA backend
+(e.g. https://gist.github.com/ryujaehun/5c841d3f5a7f720a14a3a7eb05326176)
 
-Apache TVM is a compiler stack for deep learning systems. It is designed to close the gap between the
-productivity-focused deep learning frameworks, and the performance- and efficiency-focused hardware backends.
-TVM works with deep learning frameworks to provide end to end compilation to different backends.
+## build tvm
 
-License
--------
-© Contributors Licensed under an [Apache-2.0](LICENSE) license.
+```
+cd build
+cmake ..
+make -j $(($(nproc) + 1))
+cd ..
+```
 
-Contribute to TVM
------------------
-TVM adopts apache committer model, we aim to create an open source project that is maintained and owned by the community.
-Checkout the [Contributor Guide](https://tvm.apache.org/docs/contribute/)
+## set the environment variable
+Append `~/.bashrc.`
+```
+export TVM_HOME=/path/to/one-shot-tuner
+export PYTHONPATH=$TVM_HOME/python:${PYTHONPATH}
+```
 
-Acknowledgement
----------------
-We learned a lot from the following projects when building TVM.
-- [Halide](https://github.com/halide/Halide): Part of TVM's TIR and arithmetic simplification module
-  originates from Halide. We also learned and adapted some part of lowering pipeline from Halide.
-- [Loopy](https://github.com/inducer/loopy): use of integer set analysis and its loop transformation primitives.
-- [Theano](https://github.com/Theano/Theano): the design inspiration of symbolic scan operator for recurrence.
+
+## Python dependencies
+```
+pip3 install tornado psutil xgboost cloudpickle decorator pytest
+pip3 install  -r requirements.txt
+```
+
+#  prior-guided task sampilng(PBS) and Exploration Based code Sampling(EBS)
+The extracted dataset for CUDA data is included.
+
+- `-p` activates Prior Guided Task Sampling.
+- `-e` activates Exploration Based code sampling.
+
+```
+python3 dataset_generate/sampling.py -p -e
+```
+
+# Training a cost model 
+
+```
+python3 train_model/train.py --dataset_dir <dataset path (e.g. /root/ost/dataset_generate)> --layout NCHW --batch 1
+```
+
+#  Evaluating and collecting results
+
+You can run all main experiment(CUDA device,NCHW format batch 1) using `main.sh` script.
+
+```
+main.sh
+```
+
+Create a folder using the save path and parameters that can be specified in the script and save the result (second,flops/s and end-to-end time).
+
+__Example path__
+
+- `<one-shot-tuner>/eval_tuner/save_path/resnet-18/NCHW/1/sa/flops.npy`
+
+__How to collect results__
+
+```
+python3 get_result.py  
+```
+
+## Docker guide
+
+If setting the environment is difficult, try using Docker container
+
+```
+
+docker run -it --rm --gpus 1 --name test jaehun/ost:v2 bash # docker running
+cd /root/tvm
+./main.sh 									  # start experiment
+python3 get_result.py                         # get results
+```
+
+## Hardware dependencies
+
+We recommend systems with NVIDIA GeForce RTX 2080
+Ti GPU and Intel Xeon CPU E5-2666 v3 CPU (AWS c4 4x
+large instances) for verifying GPU and CPU results respec-
+tively. 
+
+## Software dependencies
+
+Our code is implemented and tested on Ubuntu 18.04 x86-64
+system, with CUDA 10.2 and cudnn 7. Additional software
+dependencies include minimal pre-requisites on Ubuntu for
+TVM and deep learning frameworks, i.e., PyTorch v1.6.0,
+for model implementations. We highly recommend using
+the following docker image, ”jaehun/ost:v2”. 
