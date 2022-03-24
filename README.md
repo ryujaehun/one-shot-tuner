@@ -1,3 +1,24 @@
+to cite One-shot tuner:
+``` bibtex
+@inproceedings{10.1145/3497776.3517774,
+author = {Ryu, Jaehun and Park, Eunhyeok and Sung, Hyojin},
+title = {One-Shot Tuner for Deep Learning Compilers},
+year = {2022},
+isbn = {9781450391832},
+publisher = {Association for Computing Machinery},
+address = {New York, NY, USA},
+url = {https://doi.org/10.1145/3497776.3517774},
+doi = {10.1145/3497776.3517774},
+abstract = {Auto-tuning DL compilers are gaining ground as an optimizing back-end for DL frameworks. While existing work can generate deep learning models that exceed the performance of hand-tuned libraries, they still suffer from prohibitively long auto-tuning time due to repeated hardware measurements in large search spaces. In this paper, we take a neural-predictor inspired approach to reduce the auto-tuning overhead and show that a performance predictor model trained prior to compilation can produce optimized tensor operation codes without repeated search and hardware measurements. To generate a sample-efficient training dataset, we extend input representation to include task-specific information and to guide data sampling methods to focus on learning high-performing codes. We evaluated the resulting predictor model, One-Shot Tuner, against AutoTVM and other prior work, and the results show that One-Shot Tuner speeds up compilation by 2.81x to 67.7x compared to prior work while providing comparable or improved inference time for CNN and Transformer models.},
+booktitle = {Proceedings of the 31st ACM SIGPLAN International Conference on Compiler Construction},
+pages = {89–103},
+numpages = {15},
+keywords = {deep neural networks, autotuning, performance models, optimizing compilers},
+location = {Seoul, South Korea},
+series = {CC 2022}
+}
+```
+
 
 # Install TVM
 ```
